@@ -2,8 +2,10 @@ cask_args appdir: '/Applications'
 
 tap 'homebrew/bundle'
 
+brew 'awscli'
 brew 'coreutils'
 brew 'git'
+brew 'libpq', link: true
 brew 'mas'
 brew 'node'
 brew 'nvm'
