@@ -4,6 +4,7 @@ tap 'homebrew/bundle'
 
 brew 'awscli'
 brew 'coreutils'
+brew 'fzf'
 brew 'git'
 brew 'libpq', link: true
 brew 'mas'
