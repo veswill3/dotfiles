@@ -48,7 +48,7 @@ defaults write com.apple.finder ShowMountedServersOnDesktop -bool true
 # default: -bool true
 defaults write com.apple.finder ShowRemovableMediaOnDesktop -bool true
 # default: no default
-defaults write com.apple.finder CreateDesktop -bool false
+defaults write com.apple.finder CreateDesktop -bool true
 
 ## Finder: show hidden files by default
 # default: -bool false
@@ -141,8 +141,8 @@ echo '>> updating dock settings'
 # default: no default
 defaults write com.apple.dock mouse-over-hilite-stack -bool true
 
-# Set the icon size of Dock items to 36 pixels
-defaults write com.apple.dock tilesize -int 36
+# Set the icon size of Dock items in pixels
+defaults write com.apple.dock tilesize -int 25
 
 # Change minimize/maximize window effect
 defaults write com.apple.dock mineffect -string "scale"
@@ -161,7 +161,7 @@ defaults write com.apple.dock show-process-indicators -bool false
 defaults write com.apple.dock persistent-apps -array
 
 # Show only open applications in the Dock
-#defaults write com.apple.dock static-only -bool true
+defaults write com.apple.dock static-only -bool true
 
 # Don’t animate opening applications from the Dock
 # default: no default
@@ -242,3 +242,7 @@ defaults write com.apple.dock show-recents -bool false
 # # Bottom right screen corner → Start screen saver
 # defaults write com.apple.dock wvous-br-corner -int 3
 # defaults write com.apple.dock wvous-br-modifier -int 3
+
+killall Dock
+killall Finder
+killall SystemUIServer
