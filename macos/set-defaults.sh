@@ -16,6 +16,9 @@ defaults write NSGlobalDomain KeyRepeat -int 1
 # Disable the “Are you sure you want to open this application?” dialog
 defaults write com.apple.LaunchServices LSQuarantine -bool false
 
+# Disable auto-correct
+defaults write NSGlobalDomain NSAutomaticSpellingCorrectionEnabled -bool false
+
 ###############################################################################
 # Finder                                                                      #
 ###############################################################################
