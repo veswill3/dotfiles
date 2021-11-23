@@ -7,6 +7,7 @@ brew 'coreutils'
 brew 'direnv'
 brew 'fzf'
 brew 'git'
+brew 'jq'
 brew 'libpq', link: true
 brew 'mas'
 brew 'node'
