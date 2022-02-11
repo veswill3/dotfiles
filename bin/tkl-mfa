@@ -1,0 +1,410 @@
+#!/usr/bin/python3
+# `tkl-mfa`
+# Description: MFA handling script for AWS
+# Version:     0.5.1
+# Repo:        https://github.com/tackle-io/tkl-mfa/
+# Author:      justin.roberson@tackle.io
+import argparse
+import configparser
+import json
+import logging
+import os
+import re
+import subprocess
+import shutil
+import sys
+from typing import Any, Iterator, Optional, OrderedDict, Union
+
+
+class Config(object):
+    variables = OrderedDict(
+        [
+            (
+                "log_level",
+                {
+                    "default": lambda _: "1",
+                    "help": "Verbosity level (0-3). 0 is silent; 1 is important; 2 is info; 3 is debug. Defaults to 1 (important).",
+                },
+            ),
+            (
+                "root_path",
+                {
+                    "default": lambda _: os.path.join(os.path.expanduser("~"), ".aws"),
+                    "help": "Path to `.aws`. Defaults to `~/.aws`.",
+                },
+            ),
+            (
+                "config_path",
+                {
+                    "default": lambda self: os.path.join(self.root_path, "config"),
+                    "help": "Path to AWS profile config file. Defaults to `~/.aws/profile`.",
+                },
+            ),
+            (
+                "credentials_path",
+                {
+                    "default": lambda self: os.path.join(self.root_path, "credentials"),
+                    "help": "Path to AWS profile config file. Defaults to `~/.aws/credentials`.",
+                },
+            ),
+            (
+                "mfa_token",
+                {
+                    "alt_args": ("--token", "-t"),
+                    "help": "MFA TOTP code. If not specified 1password will be used if enabled or a prompt will be issued.",
+                },
+            ),
+            (
+                "mfa_source_profile",
+                {
+                    "default": lambda _: "tackle",
+                    "help": "Base AWS profile where credentials are stored. Defaults to `tackle`.",
+                },
+            ),
+            (
+                "mfa_session_profile",
+                {
+                    "default": lambda _: "tackle-mfa",
+                    "help": "Intermediate AWS profile where MFA session will be stored. Defaults to `tackle-mfa`.",
+                },
+            ),
+            (
+                "mfa_device_arn",
+                {
+                    "help": "MFA serial/device ARN. If not specified auto-discovery attempts will be made.",
+                },
+            ),
+            (
+                "mfa_1password_vault",
+                {
+                    "help": "1password integration: Name 1password vault containing AWS TOTP information. (Optional)",
+                },
+            ),
+            (
+                "mfa_1password_item",
+                {
+                    "help": "1password integration: Name of AWS item containing TOTP information in the 1password vault. Setting this value enables 1password integration.",
+                },
+            ),
+            (
+                "migrate_profiles",
+                {
+                    "default": lambda _: "true",
+                    "help": "Enable automatically updating non-critical aspects of other AWS profiles. Defaults to true."
+                }
+            )
+        ]
+    )
+
+    def __init__(self) -> None:
+        parser = argparse.ArgumentParser()
+        for variable in self.variables:
+            parser_arg = "--" + variable.replace("_", "-")
+            envvar = "AWS_" + variable.upper()
+            parser.add_argument(
+                parser_arg,
+                *self.variables[variable].get("alt_args", []),
+                metavar=envvar,
+                help=self.variables[variable]["help"],
+                default=os.environ.get(envvar),  # Handle further default fallthroughs after parsing arguments
+            )
+        args = vars(parser.parse_args())
+        for variable in self.variables:
+            if args[variable] is None:
+                setattr(self, variable, self.variables[variable].get("default", lambda _: None)(self))
+            else:
+                setattr(self, variable, args[variable])
+
+    def __repr__(self) -> str:
+        return str(dict(map(lambda key: (key, getattr(self, key)), self.variables)))
+
+    def __getitem__(self, name: str) -> Optional[str]:
+        return getattr(self, name)
+
+    def get(self, name: str, default: Optional[str] = None) -> Optional[str]:
+        return getattr(self, name, default)
+
+
+class Logger(object):
+    def __init__(self, level: str) -> None:
+        self.level = level
+        # Translate "our" log level into one that `logging` understands.
+        config_level = {
+            "0": "CRITICAL",
+            "1": "WARNING",
+            "2": "INFO",
+            "3": "DEBUG",
+        }
+        logging.basicConfig(level=config_level.get(self.level, "NOTSET"))
+
+    def important(self, *msg):
+        if int(self.level) >= 1:
+            print(*msg)
+
+    def info(self, *msg):
+        if int(self.level) >= 2:
+            print(*msg)
+
+    def debug(self, *msg):
+        if int(self.level) >= 3:
+            logging.debug(*msg)
+
+
+class OnePasswordService(object):
+    def __init__(self) -> None:
+        if not shutil.which("op"):
+            raise Exception("`op` command not found. Please install 1password-cli.")
+
+    def get_totp(self, item: str, vault: str = None) -> str:
+        kwargs = {}
+        if vault:
+            kwargs["vault"] = vault
+        return self.run_op_command("get", "totp", item, **kwargs)
+
+    def run_op_command(self, *args, **kwargs) -> str:
+        args = ["op", *args]
+        for key, value in kwargs.items():
+            args.append("--" + key.lower().replace("_", "-"))
+            args.append(value)
+        return subprocess.check_output(args).decode("utf-8").strip()
+
+
+class AwsService(object):
+    def __init__(self) -> None:
+        if not shutil.which("aws"):
+            raise Exception("`aws` command not found. Please install awscli.")
+
+    def get_mfa_session_credentials(self, mfa_device_arn: str, source_profile: str, mfa_token: str) -> dict:
+        return self.run_awscli_command(
+            service="sts",
+            action="get-session-token",
+            serial_number=mfa_device_arn,
+            profile=source_profile,
+            token_code=mfa_token,
+        )["Credentials"]
+
+    def get_mfa_device_arn(self, profile: str) -> str:
+        user_arn = self.get_caller_identity(profile)["Arn"]
+        return user_arn.replace(":user/", ":mfa/")
+
+    def get_user_name(self, profile: str) -> str:
+        user_arn = self.get_caller_identity(profile)["Arn"]
+        return re.findall(r":user/(.+)", user_arn)[0]
+
+    def get_caller_identity(self, profile: str) -> dict:
+        return self.run_awscli_command(
+            service="sts",
+            action="get-caller-identity",
+            profile=profile,
+        )
+
+    def run_awscli_command(self, service: str, action: str, **kwargs: dict) -> Any:
+        kwargs["output"] = kwargs.get("output", "json")
+        args = ["aws", service, action]
+        for key, value in kwargs.items():
+            args.append("--" + key.lower().replace("_", "-"))
+            args.append(value)
+        return json.loads(subprocess.check_output(args))
+
+
+class AwsCredentialsParser(object):
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self.configparser = configparser.ConfigParser()
+        self.configparser.read(self.path)
+
+    def __setitem__(self, profile: str, options: configparser.SectionProxy) -> None:
+        self.configparser.__setitem__(self._profile_to_section(profile), options)
+
+    def __getitem__(self, profile: str) -> configparser.SectionProxy:
+        return self.configparser.__getitem__(self._profile_to_section(profile))
+
+    def __iter__(self) -> Iterator[str]:
+        # configparser tries to be too helpful sometimes and returns things
+        # like the DEFAULT section which we don't care about
+        # older pythons don't have removeprefix
+        return iter(
+            section.replace("profile ", "", 1) for section in self.configparser.keys() if section.startswith("profile ")
+        )
+
+    def __next__(self) -> str:
+        return self._profile_to_section(self.configparser.__next__())
+
+    def write(self, path: Optional[str] = None) -> None:
+        with open(path or self.path, "w") as file:
+            self.configparser.write(file)
+
+    def has_profile(self, profile: str) -> bool:
+        return self.configparser.has_section(self._profile_to_section(profile))
+
+    def add_profile(self, profile: str) -> None:
+        self.configparser.add_section(self._profile_to_section(profile))
+
+    def has_option(self, profile: str, option: str) -> bool:
+        return self.configparser.has_option(self._profile_to_section(profile), option)
+
+    def get_option(self, profile: str, option: str, default: str = None) -> Optional[str]:
+        return self[profile][option] if self.has_option(profile, option) else default
+
+    def remove_option(self, profile: str, option: str) -> bool:
+        return self.configparser.remove_option(self._profile_to_section(profile), option)
+
+    def _profile_to_section(self, profile_name: str) -> str:
+        return profile_name
+
+
+# inheritance bad but ¯\_(ツ)_/¯
+class AwsConfigParser(AwsCredentialsParser):
+    def _profile_to_section(self, profile_name: str) -> str:
+        return "profile " + profile_name
+
+
+class ProfileMigrationHandler(object):
+    def __init__(
+        self,
+        parser: Union[AwsCredentialsParser, AwsConfigParser],
+        config: Config,
+    ) -> None:
+        self.parser = parser
+        self.config = config
+        self.logger = logging.getLogger("ProfileMigrationHandler")
+        self.cache: dict[str, Any] = {}
+
+    def run(self, profile_name):
+        self._update_source_profile(profile_name)
+        self._set_session_name(profile_name)
+
+    def _update_source_profile(self, profile_name: str):
+        if profile_name in (self.config.mfa_source_profile, self.config.mfa_session_profile):
+            self.logger.debug(f"{profile_name} is a source or session profile, not updating.")
+            return
+        if self.parser.get_option(profile_name, "source_profile") == self.config.mfa_source_profile:
+            self.logger.debug(
+                f"{profile_name}'s source_profile is {self.config.mfa_source_profile}, needs to be updated to {self.config.mfa_session_profile}"
+            )
+            self.parser[profile_name]["source_profile"] = self.config.mfa_session_profile
+            self.logger.debug(f"Removing {profile_name}'s mfa_serial.")
+            self.parser.remove_option(profile_name, "mfa_serial")
+        else:
+            self.logger.debug(f"{profile_name} does not need to be updated.")
+
+    def _set_session_name(self, profile_name: str):
+        if self.parser.get_option(profile_name, "source_profile") != self.config.mfa_session_profile:
+            self.logger.debug(f"{profile_name} does not source the MFA session profile. Skipping.")
+            return
+        role_session_name = self.parser.get_option(profile_name, "role_session_name", "")
+        # Check the role session name is in an acceptable format. Acceptable
+        # formats are the following: "first.last", "fl", "u-fl".
+        if re.match(r"(^\w+\.\w+$)|(^\w{2}$)|(^u\-\w{2}$)", role_session_name):
+            self.logger.debug(f"{profile_name} appears to have a valid role session name, not updating.")
+            return
+        if not "aws_username" in self.cache:
+            self.logger.debug(f"Migration cache does not contain aws_username, populating")
+            aws_service = AwsService()
+            self.cache["aws_username"] = aws_service.get_user_name(self.config.mfa_source_profile)
+            self.logger.debug(f'AWS username: {self.cache["aws_username"]}')
+        aws_username = self.cache["aws_username"]
+        if role_session_name == aws_username:
+            self.logger.debug(f"{profile_name}'s role session name matches the AWS username, not updating.")
+            return
+        self.logger.debug(f"{profile_name}'s role session name must be updated. Updating.")
+        self.parser[profile_name]["role_session_name"] = aws_username
+
+
+def main():
+    config = Config()
+
+    logger = Logger(config.log_level)
+    logger.debug(f"Config: {repr(config)}")
+
+    aws_service = AwsService()
+
+    logger.debug(f"Reading AWS config from {config.config_path}")
+    aws_config = AwsConfigParser(config.config_path)
+    logger.debug(f"Reading AWS credentials from {config.credentials_path}")
+    aws_credentials = AwsCredentialsParser(config.credentials_path)
+
+    if not aws_config.has_profile(config.mfa_session_profile):
+        logger.info("MFA session profile not found in AWS config, creating.")
+        aws_config[config.mfa_session_profile] = aws_config[config.mfa_source_profile]
+    if not aws_credentials.has_profile(config.mfa_session_profile):
+        logger.info("MFA session profile not found in AWS credentials, creating.")
+        aws_credentials[config.mfa_session_profile] = aws_config[config.mfa_source_profile]
+
+    if config.mfa_device_arn:
+        mfa_device_arn = config.mfa_device_arn
+        logger.debug("MFA device ARN passed in explicitly.")
+    elif aws_credentials.has_option(config.mfa_session_profile, "aws_mfa_device"):
+        mfa_device_arn = aws_credentials[config.mfa_session_profile]["aws_mfa_device"]
+        logger.debug(f"MFA device ARN retrieved from AWS credentials [{config.mfa_session_profile}] ... aws_mfa_device")
+    elif aws_config.has_option(config.mfa_session_profile, "mfa_serial"):
+        mfa_device_arn = aws_config[config.mfa_session_profile]["mfa_serial"]
+        logger.debug(f"MFA device ARN retrieved from AWS config [{config.mfa_session_profile}] ... mfa_serial")
+    else:
+        mfa_device_arn = aws_service.get_mfa_device_arn(config.mfa_source_profile)
+        logger.debug(f"MFA device ARN could not be auto-discovered. Guessing ARN.")
+
+    logger.info(f"MFA device is {mfa_device_arn}")
+
+    # If token is passed explicitly, use that. Then try 1password integration.
+    # THEN prompt (also supports stdin).
+    if config.mfa_token:
+        logger.debug("MFA token passed in explicitly.")
+        mfa_token = config.mfa_token
+    elif config.mfa_1password_item:
+        logger.info(
+            f"Getting MFA token from 1Password item {config.mfa_1password_item}{' in vault ' + config.mfa_1password_vault if config.mfa_1password_vault else ''}"
+        )
+        one_password_service = OnePasswordService()
+        mfa_token = one_password_service.get_totp(item=config.mfa_1password_item, vault=config.mfa_1password_vault)
+        logger.debug(f"MFA token retrieved from 1Password.")
+    else:
+        logger.debug("Retrieving MFA token from prompt.")
+        mfa_token = input(f"Enter MFA code for device {mfa_device_arn}: ")
+
+    logger.info(f"MFA token is {mfa_token}")
+
+    logger.important("Getting session credentials...")
+    session_credentials = aws_service.get_mfa_session_credentials(
+        mfa_device_arn=mfa_device_arn,
+        source_profile=config.mfa_source_profile,
+        mfa_token=mfa_token,
+    )
+
+    # Map the output of get-session-token to config file values. Expiration
+    # technically isn't needed but it's useful.
+    logger.debug(f"Setting credential fields in profile {config.mfa_session_profile}")
+    value_map = [
+        ("aws_access_key_id", "AccessKeyId"),
+        ("aws_secret_access_key", "SecretAccessKey"),
+        ("aws_session_token", "SessionToken"),
+        ("aws_security_token", "SessionToken"),
+        ("expiration", "Expiration"),
+    ]
+    for option, value in value_map:
+        logger.debug(f"{value} -> {option} '{session_credentials[value]}'")
+        aws_credentials[config.mfa_session_profile][option] = session_credentials[value]
+
+    # Be helpful and fix up all of the subprofiles to use the new MFA session
+    # container profile.
+    if config.migrate_profiles.lower() in ("true", "t", "yes", "y"):
+        logger.important("Migrating profiles...")
+        profile_migration_handler = ProfileMigrationHandler(parser=aws_config, config=config)
+        for profile in aws_config:
+            profile_migration_handler.run(profile)
+    else:
+        logger.info("Profile migrations are disabled.")
+
+    aws_config.write()
+    aws_credentials.write()
+
+    logger.important(f"{config.mfa_session_profile} updated.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print("tkl-mfa has run into an issue.")
+        print(e)
+        sys.exit(1)
