@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 # `tkl-mfa`
 # Description: MFA handling script for AWS
-# Version:     0.5.1
+# Version:     0.5.4
 # Repo:        https://github.com/tackle-io/tkl-mfa/
 # Author:      justin.roberson@tackle.io
 import argparse
@@ -90,9 +90,9 @@ class Config(object):
                 "migrate_profiles",
                 {
                     "default": lambda _: "true",
-                    "help": "Enable automatically updating non-critical aspects of other AWS profiles. Defaults to true."
-                }
-            )
+                    "help": "Enable automatically updating non-critical aspects of other AWS profiles. Defaults to true.",
+                },
+            ),
         ]
     )
 
@@ -150,16 +150,13 @@ class Logger(object):
             logging.debug(*msg)
 
 
-class OnePasswordService(object):
+class BaseOnePasswordService:
     def __init__(self) -> None:
         if not shutil.which("op"):
             raise Exception("`op` command not found. Please install 1password-cli.")
 
     def get_totp(self, item: str, vault: str = None) -> str:
-        kwargs = {}
-        if vault:
-            kwargs["vault"] = vault
-        return self.run_op_command("get", "totp", item, **kwargs)
+        raise NotImplementedError()
 
     def run_op_command(self, *args, **kwargs) -> str:
         args = ["op", *args]
@@ -167,6 +164,36 @@ class OnePasswordService(object):
             args.append("--" + key.lower().replace("_", "-"))
             args.append(value)
         return subprocess.check_output(args).decode("utf-8").strip()
+
+
+class OnePasswordServiceV1(BaseOnePasswordService):
+    def get_totp(self, item: str, vault: str = None) -> str:
+        kwargs = {}
+        if vault:
+            kwargs["vault"] = vault
+        return self.run_op_command("get", "totp", item, **kwargs)
+
+
+class OnePasswordServiceV2(BaseOnePasswordService):
+    def get_totp(self, item: str, vault: str = None) -> str:
+        kwargs = {}
+        if vault:
+            kwargs["vault"] = vault
+        return self.run_op_command("item", "get", item, "--otp", **kwargs)
+
+
+def OnePasswordService(*args, **kwargs) -> BaseOnePasswordService:
+    temp_service = BaseOnePasswordService(*args, **kwargs)
+    version = temp_service.run_op_command("--version")
+    match = re.match(r"(\d+?)\..+", version)
+    if not match:
+        raise Exception(f"Unable to determine 1password-cli version. Got `{version}`")
+    major_version = int(match[1])
+    if major_version == 1:
+        return OnePasswordServiceV1(*args, **kwargs)
+    elif major_version == 2:
+        return OnePasswordServiceV2(*args, **kwargs)
+    raise Exception(f"Unsupported 1password-cli version `{version}`")
 
 
 class AwsService(object):
@@ -319,10 +346,27 @@ def main():
 
     aws_service = AwsService()
 
+    logger.debug("Checking to see if config files are accessible.")
+    for path in (config.config_path, config.credentials_path):
+        if not os.access(path, os.W_OK):
+            raise Exception(
+                f"Unable to access the file at {path}. Make sure the file exists and is readable and writable. "
+                f"You can do this by running `mkdir -p {config.root_path} && touch {path} && chmod u+rw {path}`."
+            )
+
     logger.debug(f"Reading AWS config from {config.config_path}")
     aws_config = AwsConfigParser(config.config_path)
     logger.debug(f"Reading AWS credentials from {config.credentials_path}")
     aws_credentials = AwsCredentialsParser(config.credentials_path)
+
+    for parser in (aws_config, aws_credentials):
+        logger.debug(f"Checking to see if the source profile is present in {path}.")
+        if not parser.has_profile(config.mfa_source_profile):
+            raise Exception(
+                f'Your AWS config at {parser.path} does not have a "{config.mfa_source_profile}" profile. '
+                f'Please run `aws configure --profile="{config.mfa_source_profile}"` or edit {parser.path} to '
+                "configure the source profile."
+            )
 
     if not aws_config.has_profile(config.mfa_session_profile):
         logger.info("MFA session profile not found in AWS config, creating.")
@@ -337,9 +381,15 @@ def main():
     elif aws_credentials.has_option(config.mfa_session_profile, "aws_mfa_device"):
         mfa_device_arn = aws_credentials[config.mfa_session_profile]["aws_mfa_device"]
         logger.debug(f"MFA device ARN retrieved from AWS credentials [{config.mfa_session_profile}] ... aws_mfa_device")
+    elif aws_credentials.has_option(config.mfa_source_profile, "aws_mfa_device"):
+        mfa_device_arn = aws_credentials[config.mfa_source_profile]["aws_mfa_device"]
+        logger.debug(f"MFA device ARN retrieved from AWS credentials [{config.mfa_source_profile}] ... aws_mfa_device")
     elif aws_config.has_option(config.mfa_session_profile, "mfa_serial"):
         mfa_device_arn = aws_config[config.mfa_session_profile]["mfa_serial"]
         logger.debug(f"MFA device ARN retrieved from AWS config [{config.mfa_session_profile}] ... mfa_serial")
+    elif aws_config.has_option(config.mfa_source_profile, "mfa_serial"):
+        mfa_device_arn = aws_config[config.mfa_source_profile]["mfa_serial"]
+        logger.debug(f"MFA device ARN retrieved from AWS config [{config.mfa_source_profile}] ... mfa_serial")
     else:
         mfa_device_arn = aws_service.get_mfa_device_arn(config.mfa_source_profile)
         logger.debug(f"MFA device ARN could not be auto-discovered. Guessing ARN.")
