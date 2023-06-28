@@ -26,3 +26,5 @@
         default = simple
 [rebase]
 	autoStash = true
+[rerere]
+	enabled = true
