@@ -3,7 +3,7 @@ cask_args appdir: '/Applications'
 tap 'homebrew/bundle'
 
 brew 'awscli'
-brew 'colima'
+brew 'colima', args: ['HEAD']
 brew 'coreutils'
 brew 'direnv'
 brew 'docker-compose'
