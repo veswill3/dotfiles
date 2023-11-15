@@ -247,6 +247,16 @@ defaults write com.apple.dock show-recents -bool false
 # defaults write com.apple.dock wvous-br-corner -int 3
 # defaults write com.apple.dock wvous-br-modifier -int 3
 
+# disable drag and drop of text
+defaults write -g NSDragAndDropTextDelay -int -1
+
+# default to paste and match style. Sometimes when pasting images you need to do the normal paste
+defaults write -g NSUserKeyEquivalents -dict-add 'Paste and Match Style' '@v';
+
+# disable two finger back/forward navigation in chrome
+defaults write com.google.Chrome AppleEnableMouseSwipeNavigateWithScrolls -bool false
+defaults write com.google.Chrome AppleEnableSwipeNavigateWithScrolls -bool false
+
 killall Dock
 killall Finder
 killall SystemUIServer
