@@ -6,6 +6,7 @@
         wtf = !$ZSHDOT/bin/git-wtf
         rank-contributors = !$ZSHDOT/bin/git-rank-contributors
         count = !git shortlog -sn
+	gone = ! git fetch -p && git for-each-ref --format '%(refname:short) %(upstream:track)' | awk '$2 == \"[gone]\" {print $1}' | xargs -r git branch -D
 [color]
         diff = auto
         status = auto
