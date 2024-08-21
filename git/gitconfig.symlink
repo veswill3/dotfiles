@@ -30,3 +30,5 @@
 	autoSquash = true
 [rerere]
 	enabled = true
+[url "ssh://git@github.com/tackle-io/"]
+	insteadOf = "https://github.com/tackle-io/"
