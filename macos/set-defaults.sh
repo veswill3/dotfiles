@@ -224,7 +224,8 @@ defaults write com.apple.dock show-recents -bool false
 
 # # Hot corners
 # # Possible values:
-# #  0: no-op
+# #  0: Disabled
+# #  1: Nothing
 # #  2: Mission Control
 # #  3: Show application windows
 # #  4: Desktop
@@ -234,18 +235,23 @@ defaults write com.apple.dock show-recents -bool false
 # # 10: Put display to sleep
 # # 11: Launchpad
 # # 12: Notification Center
+# # 13: Lock Screen
+# # 14: Quick Note
 # # Top left screen corner → Nothing
-# defaults write com.apple.dock wvous-tl-corner -int 0
-# defaults write com.apple.dock wvous-tl-modifier -int 0
+defaults write com.apple.dock wvous-tl-corner -int 0
+defaults write com.apple.dock wvous-tl-modifier -int 0
 # # Top right screen corner → Nothing
-# defaults write com.apple.dock wvous-tr-corner -int 0
-# defaults write com.apple.dock wvous-tr-modifier -int 0
-# # Bottom left screen corner → Start screen saver
-# defaults write com.apple.dock wvous-bl-corner -int 2
-# defaults write com.apple.dock wvous-bl-modifier -int 0
-# # Bottom right screen corner → Start screen saver
-# defaults write com.apple.dock wvous-br-corner -int 3
-# defaults write com.apple.dock wvous-br-modifier -int 3
+defaults write com.apple.dock wvous-tr-corner -int 0
+defaults write com.apple.dock wvous-tr-modifier -int 0
+# # Bottom left screen corner → Nothing
+defaults write com.apple.dock wvous-bl-corner -int 0
+defaults write com.apple.dock wvous-bl-modifier -int 0
+# # Bottom right screen corner → Nothing
+defaults write com.apple.dock wvous-br-corner -int 0
+defaults write com.apple.dock wvous-br-modifier -int 0
+
+# Put the Dock on the left of the screen
+defaults write com.apple.dock "orientation" -string "left"
 
 # disable drag and drop of text
 defaults write -g NSDragAndDropTextDelay -int -1
@@ -257,7 +263,11 @@ defaults write -g NSUserKeyEquivalents -dict-add 'Paste and Match Style' '@v';
 defaults write com.google.Chrome AppleEnableMouseSwipeNavigateWithScrolls -bool false
 defaults write com.google.Chrome AppleEnableSwipeNavigateWithScrolls -bool false
 
+# enable mouse right click
+defaults write com.apple.driver.AppleBluetoothMultitouch.mouse MouseButtonMode TwoButton
+
 killall Dock
 killall Finder
 killall SystemUIServer
 killall NotificationCenter
+killall cfprefsd
