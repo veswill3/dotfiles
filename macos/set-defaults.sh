@@ -256,8 +256,9 @@ defaults write com.apple.dock "orientation" -string "left"
 # disable drag and drop of text
 defaults write -g NSDragAndDropTextDelay -int -1
 
-# default to paste and match style. Sometimes when pasting images you need to do the normal paste
-defaults write -g NSUserKeyEquivalents -dict-add 'Paste and Match Style' '@v';
+# default to paste and match style.
+# disabling for now as it causes some oddities. Sometimes when pasting images you need to do the normal paste
+# defaults write -g NSUserKeyEquivalents -dict-add 'Paste and Match Style' '@v';
 
 # disable two finger back/forward navigation in chrome
 defaults write com.google.Chrome AppleEnableMouseSwipeNavigateWithScrolls -bool false
