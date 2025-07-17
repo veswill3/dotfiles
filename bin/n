@@ -1,0 +1,5 @@
+#!/bin/sh
+#
+# Open notes directory
+
+exec "$EDITOR" "$HOME/notes/"
