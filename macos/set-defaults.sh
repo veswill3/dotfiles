@@ -267,6 +267,9 @@ defaults write com.google.Chrome AppleEnableSwipeNavigateWithScrolls -bool false
 # enable mouse right click
 defaults write com.apple.driver.AppleBluetoothMultitouch.mouse MouseButtonMode TwoButton
 
+# disable Natural Scrolling (traditional scrolling)
+defaults write -g com.apple.swipescrolldirection -bool false
+
 killall Dock
 killall Finder
 killall SystemUIServer
