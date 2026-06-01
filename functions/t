@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+
+# Simple todo list manager for ~/notes/todo.md
+# Inspired by https://github.com/sjl/t
+
+TODO_FILE="$HOME/notes/todo.md"
+
+show_help() {
+    cat <<EOF
+Usage: t [options] [text]
+
+A simple todo list manager for $TODO_FILE
+Inspired by https://github.com/sjl/t
+
+Commands:
+  t                 List all uncompleted tasks from the top section
+  t <text>          Add a new todo with the given text
+  t -h, --help      Show this help message
+EOF
+}
+
+case "$1" in
+    -h|--help)
+        show_help
+        ;;
+    "")
+        # List current todos (top section only, stop at first header)
+        sed '/^#/q' "$TODO_FILE" | grep '^\- \[ \]'
+        ;;
+    *)
+        # Add a new todo as the first line
+        todo="- [ ] $*"
+        { echo "$todo"; cat "$TODO_FILE"; } > "$TODO_FILE.tmp" && mv "$TODO_FILE.tmp" "$TODO_FILE"
+        ;;
+esac

@@ -1,0 +1,19 @@
+#!/bin/sh
+#
+# Usage: decode [string]
+# Description: Decodes base64 encoded strings
+# Can be used with arguments: decode "encoded_text"
+# Or with pipes: echo "encoded_text" | decode
+#
+
+if [ -t 0 ]; then
+    # Input is from terminal (has arguments)
+    if [ -z "$1" ]; then
+        echo "Usage: decode <string>" >&2
+        exit 1
+    fi
+    echo "$1" | base64 -d
+else
+    # Input is from pipe/redirect
+    base64 -d
+fi

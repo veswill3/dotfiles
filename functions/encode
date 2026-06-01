@@ -1,0 +1,19 @@
+#!/bin/sh
+#
+# Usage: encode [string]
+# Description: Encodes strings to base64
+# Can be used with arguments: encode "text"
+# Or with pipes: echo "text" | encode
+#
+
+if [ -t 0 ]; then
+    # Input is from terminal (has arguments)
+    if [ -z "$1" ]; then
+        echo "Usage: encode <string>" >&2
+        exit 1
+    fi
+    echo -n "$1" | base64
+else
+    # Input is from pipe/redirect
+    base64
+fi
